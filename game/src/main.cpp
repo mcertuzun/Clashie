@@ -7,6 +7,7 @@
 #include "pebble/gfx/sprite_batch.h"
 #include "pebble/framework/ui.h"
 #include "pebble/framework/particle.h"
+#include "pebble/audio/audio.h"
 #include "miniclash/simulation.h"
 #include "miniclash/replay.h"
 #include <cmath>
@@ -399,6 +400,12 @@ int main() {
     // Particle system
     ParticleSystem particles;
 
+    // Audio system
+    pebble::audio::AudioEngine audio;
+    if (!audio.init()) {
+        log_info("Audio init failed — continuing without sound.");
+    }
+
     // The base layout that will be used for attacks (starts with default test base)
     BaseLayout active_base_layout = create_test_base();
 
@@ -549,6 +556,7 @@ int main() {
                 replay_recorder->set_engine_version(1);
                 replay_recorder->set_base_hash(sim.compute_state_hash());
 
+                audio.play(pebble::audio::SoundID::ATTACK_START);
                 log_info("Attack started! Deploy troops with left-click.");
             }
         }
@@ -657,18 +665,22 @@ int main() {
             // Troop selection: 1/2/3/4
             if (input.keys_pressed[KEY_1]) {
                 selected_troop = TroopType::BARBARIAN;
+                audio.play(pebble::audio::SoundID::BUTTON_CLICK);
                 log_info("Selected: %s", troop_type_name(selected_troop));
             }
             if (input.keys_pressed[KEY_2]) {
                 selected_troop = TroopType::ARCHER;
+                audio.play(pebble::audio::SoundID::BUTTON_CLICK);
                 log_info("Selected: %s", troop_type_name(selected_troop));
             }
             if (input.keys_pressed[KEY_3]) {
                 selected_troop = TroopType::GIANT;
+                audio.play(pebble::audio::SoundID::BUTTON_CLICK);
                 log_info("Selected: %s", troop_type_name(selected_troop));
             }
             if (input.keys_pressed[KEY_4]) {
                 selected_troop = TroopType::WALL_BREAKER;
+                audio.play(pebble::audio::SoundID::BUTTON_CLICK);
                 log_info("Selected: %s", troop_type_name(selected_troop));
             }
 
@@ -698,6 +710,7 @@ int main() {
                             }
 
                             sim.tick(tick_in);
+                            audio.play(pebble::audio::SoundID::TROOP_DEPLOY);
 
                             log_info("Deployed %s at (%.1f, %.1f) — %d remaining",
                                      troop_type_name(selected_troop), world_x, world_y,
@@ -721,6 +734,9 @@ int main() {
                     replay_recorder->save_to_file(REPLAY_PATH);
                 }
 
+                audio.play(sim.result().stars >= 2
+                    ? pebble::audio::SoundID::VICTORY
+                    : pebble::audio::SoundID::DEFEAT);
                 log_info("Attack finished!");
             }
         }
@@ -796,35 +812,57 @@ int main() {
             }
         }
 
-        // --- Helper: process simulation events into particles ---
+        // --- Helper: process simulation events into particles + audio ---
         auto process_sim_events = [&]() {
             for (int ei = 0; ei < sim.event_count(); ++ei) {
                 const SimEvent& ev = sim.events()[ei];
                 float ex = fp_to_float(ev.position.x);
                 float ey = fp_to_float(ev.position.y);
                 switch (ev.type) {
-                    case SimEvent::BUILDING_DESTROYED:
+                    case SimEvent::BUILDING_DESTROYED: {
                         particles.emit_building_destroyed(ex, ey);
+                        // Determine if it was a wall
+                        bool was_wall = false;
+                        sim.for_each_building([&](const Building& b) {
+                            if (b.id == ev.source_id && b.type == BuildingType::WALL)
+                                was_wall = true;
+                        });
+                        audio.play(was_wall
+                            ? pebble::audio::SoundID::WALL_BREAK
+                            : pebble::audio::SoundID::BUILDING_DESTROYED);
                         break;
+                    }
                     case SimEvent::TROOP_KILLED:
                         particles.emit_troop_killed(ex, ey);
+                        audio.play(pebble::audio::SoundID::TROOP_DEATH);
                         break;
                     case SimEvent::TROOP_ATTACK:
                         particles.emit_attack_hit(ex, ey);
                         break;
                     case SimEvent::DEFENSE_FIRE: {
                         float tx = ex, ty = ey;
+                        BuildingType def_type = BuildingType::CANNON;
                         sim.for_each_troop([&](const Troop& t) {
                             if (t.id == ev.target_id) {
                                 tx = fp_to_float(t.pos.x);
                                 ty = fp_to_float(t.pos.y);
                             }
                         });
+                        sim.for_each_building([&](const Building& b) {
+                            if (b.id == ev.source_id) def_type = b.type;
+                        });
                         particles.emit_defense_fire(ex, ey, tx, ty);
+                        if (def_type == BuildingType::ARCHER_TOWER)
+                            audio.play(pebble::audio::SoundID::ARROW_SHOOT, 0.4f);
+                        else if (def_type == BuildingType::MORTAR)
+                            audio.play(pebble::audio::SoundID::MORTAR_LAUNCH, 0.6f);
+                        else
+                            audio.play(pebble::audio::SoundID::CANNON_FIRE, 0.5f);
                         break;
                     }
                     case SimEvent::STAR_EARNED:
                         particles.emit_star_earned();
+                        audio.play(pebble::audio::SoundID::STAR_EARNED);
                         break;
                 }
             }
@@ -854,6 +892,9 @@ int main() {
                     replay_recorder->save_to_file(REPLAY_PATH);
                 }
 
+                audio.play(sim.result().stars >= 2
+                    ? pebble::audio::SoundID::VICTORY
+                    : pebble::audio::SoundID::DEFEAT);
                 log_info("Attack finished!");
             }
         }
@@ -1664,6 +1705,7 @@ int main() {
     auto& res = sim.result();
     log_info("=== RESULT: %d stars, %d%% destruction ===", res.stars, res.destruction_percent);
 
+    audio.shutdown();
     renderer->shutdown();
     delete renderer;
     window_destroy(window);

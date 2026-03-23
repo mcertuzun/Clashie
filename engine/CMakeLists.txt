@@ -69,6 +69,27 @@ add_library(pebble_framework STATIC
 
 target_link_libraries(pebble_framework PUBLIC pebble_gfx)
 
+# --- Audio library (procedural SFX via miniaudio) ---
+add_library(pebble_audio STATIC
+    src/audio/audio.cpp
+)
+
+target_include_directories(pebble_audio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+)
+target_include_directories(pebble_audio PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(pebble_audio PUBLIC pebble_core)
+
+if(PEBBLE_PLATFORM_MACOS)
+    target_link_libraries(pebble_audio PUBLIC
+        "-framework AudioToolbox"
+        "-framework CoreAudio"
+        "-framework CoreFoundation"
+    )
+endif()
+
 # --- Convenience target: full engine ---
 add_library(pebble INTERFACE)
 target_link_libraries(pebble INTERFACE
@@ -76,4 +97,5 @@ target_link_libraries(pebble INTERFACE
     pebble_platform
     pebble_gfx
     pebble_framework
+    pebble_audio
 )
