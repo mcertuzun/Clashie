@@ -1,0 +1,44 @@
+{
+    "barbarian": {
+        "hp": 450,
+        "dps": 26,
+        "move_speed": 16,
+        "attack_range": 1,
+        "attack_speed_ms": 1000,
+        "preferred_target": "any",
+        "housing_space": 1,
+        "deploy_time_ms": 200
+    },
+    "archer": {
+        "hp": 200,
+        "dps": 22,
+        "move_speed": 24,
+        "attack_range": 3,
+        "attack_speed_ms": 1200,
+        "preferred_target": "any",
+        "housing_space": 1,
+        "deploy_time_ms": 200
+    },
+    "giant": {
+        "hp": 2800,
+        "dps": 38,
+        "move_speed": 12,
+        "attack_range": 1,
+        "attack_speed_ms": 2000,
+        "preferred_target": "defenses",
+        "housing_space": 5,
+        "deploy_time_ms": 500
+    },
+    "wall_breaker": {
+        "hp": 200,
+        "dps": 46,
+        "move_speed": 28,
+        "attack_range": 1,
+        "attack_speed_ms": 1500,
+        "preferred_target": "walls",
+        "housing_space": 2,
+        "deploy_time_ms": 300,
+        "splash_radius": 2,
+        "wall_damage_multiplier": 40
+    }
+}

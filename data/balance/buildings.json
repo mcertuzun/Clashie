@@ -1,0 +1,65 @@
+{
+    "town_hall": {
+        "size": 4,
+        "hp": 2000,
+        "is_defense": false,
+        "is_wall": false
+    },
+    "cannon": {
+        "size": 3,
+        "hp": 800,
+        "is_defense": true,
+        "is_wall": false,
+        "attack_range": 9,
+        "min_attack_range": 0,
+        "attack_damage": 62,
+        "attack_speed_ms": 800,
+        "splash_radius": 0
+    },
+    "archer_tower": {
+        "size": 3,
+        "hp": 700,
+        "is_defense": true,
+        "is_wall": false,
+        "attack_range": 10,
+        "min_attack_range": 0,
+        "attack_damage": 50,
+        "attack_speed_ms": 1000,
+        "splash_radius": 0
+    },
+    "mortar": {
+        "size": 3,
+        "hp": 600,
+        "is_defense": true,
+        "is_wall": false,
+        "attack_range": 11,
+        "min_attack_range": 4,
+        "attack_damage": 30,
+        "attack_speed_ms": 5000,
+        "splash_radius": 1.5
+    },
+    "gold_storage": {
+        "size": 3,
+        "hp": 1400,
+        "is_defense": false,
+        "is_wall": false
+    },
+    "elixir_storage": {
+        "size": 3,
+        "hp": 1400,
+        "is_defense": false,
+        "is_wall": false
+    },
+    "wall": {
+        "size": 1,
+        "hp": 500,
+        "is_defense": false,
+        "is_wall": true
+    },
+    "builder_hut": {
+        "size": 2,
+        "hp": 250,
+        "is_defense": false,
+        "is_wall": false
+    }
+}
