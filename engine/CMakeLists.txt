@@ -4,6 +4,7 @@
 add_library(pebble_core STATIC
     src/core/memory.cpp
     src/core/fixed_point.cpp
+    src/core/input.cpp
 )
 
 target_include_directories(pebble_core PUBLIC
@@ -43,15 +44,26 @@ else()
 endif()
 
 # --- Graphics library ---
-add_library(pebble_gfx STATIC
+set(PEBBLE_GFX_SOURCES
     src/gfx/sprite_batch.cpp
+    src/gfx/camera.cpp
 )
 
+if(PEBBLE_PLATFORM_MACOS)
+    list(APPEND PEBBLE_GFX_SOURCES
+        src/gfx/metal/renderer_metal.mm
+    )
+endif()
+
+add_library(pebble_gfx STATIC ${PEBBLE_GFX_SOURCES})
+target_include_directories(pebble_gfx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(pebble_gfx PUBLIC pebble_platform)
 
 # --- Framework library (tile map, flow field, animation, particles, UI) ---
 add_library(pebble_framework STATIC
     src/framework/tile_map.cpp
+    src/framework/flow_field.cpp
+    src/framework/ui.cpp
 )
 
 target_link_libraries(pebble_framework PUBLIC pebble_gfx)

@@ -21,3 +21,18 @@ target_link_libraries(pebble_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(pebble_tests)
+
+# MiniClash simulation tests
+add_executable(miniclash_tests
+    unit/test_simulation.cpp
+    ${CMAKE_SOURCE_DIR}/game/src/simulation.cpp
+    ${CMAKE_SOURCE_DIR}/game/src/building_data.cpp
+    ${CMAKE_SOURCE_DIR}/game/src/troop_data.cpp
+)
+
+target_include_directories(miniclash_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/game/include
+)
+
+target_link_libraries(miniclash_tests PRIVATE pebble GTest::gtest_main)
+gtest_discover_tests(miniclash_tests)

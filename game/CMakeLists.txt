@@ -2,6 +2,10 @@
 
 add_executable(miniclash
     src/main.cpp
+    src/simulation.cpp
+    src/replay.cpp
+    src/building_data.cpp
+    src/troop_data.cpp
 )
 
 target_include_directories(miniclash PRIVATE

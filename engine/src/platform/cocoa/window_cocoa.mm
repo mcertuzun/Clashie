@@ -2,8 +2,41 @@
 #import <Metal/Metal.h>
 #import <MetalKit/MetalKit.h>
 #include "pebble/platform/platform.h"
+#include "pebble/core/input.h"
+
+// --- Helper: convert macOS keyCode to ASCII-based key index ---
+static uint8_t cocoa_keycode_to_ascii(unsigned short keyCode) {
+    // macOS virtual keycodes -> ASCII mapping for relevant keys
+    switch (keyCode) {
+        case 0x00: return 'a';  // kVK_ANSI_A
+        case 0x01: return 's';  // kVK_ANSI_S
+        case 0x02: return 'd';  // kVK_ANSI_D
+        case 0x0D: return 'w';  // kVK_ANSI_W
+        case 0x23: return 'p';  // kVK_ANSI_P
+        case 0x0F: return 'r';  // kVK_ANSI_R
+        case 0x12: return '1';  // kVK_ANSI_1
+        case 0x13: return '2';  // kVK_ANSI_2
+        case 0x14: return '3';  // kVK_ANSI_3
+        case 0x15: return '4';  // kVK_ANSI_4
+        case 0x31: return ' ';  // kVK_Space
+        case 0x35: return 27;   // kVK_Escape
+        default:   return 0;
+    }
+}
 
 // --- Cocoa Window Implementation ---
+
+// Custom MTKView subclass that accepts key events
+@interface PebbleMetalView : MTKView
+@end
+
+@implementation PebbleMetalView
+- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)canBecomeKeyView { return YES; }
+// Suppress default Cocoa beep on key press by overriding these:
+- (void)keyDown:(NSEvent*)event { (void)event; }
+- (void)keyUp:(NSEvent*)event { (void)event; }
+@end
 
 @interface PebbleAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, assign) bool shouldClose;
@@ -83,15 +116,19 @@ WindowHandle window_create(const WindowConfig& config) {
         [data->window setDelegate:data->windowDelegate];
 
         // Metal view
-        data->metalView = [[MTKView alloc] initWithFrame:frame device:data->device];
+        data->metalView = [[PebbleMetalView alloc] initWithFrame:frame device:data->device];
         data->metalView.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-        data->metalView.depthStencilPixelFormat = MTLPixelFormatDepth32Float;
+        data->metalView.framebufferOnly = YES;
         data->metalView.preferredFramesPerSecond = 60;
         data->metalView.enableSetNeedsDisplay = NO;
-        data->metalView.paused = YES; // We drive rendering manually
+        data->metalView.paused = YES; // We drive rendering via CAMetalLayer directly
 
         [data->window setContentView:data->metalView];
         [data->window makeKeyAndOrderFront:nil];
+        [data->window makeFirstResponder:data->metalView];
+
+        // Accept mouse moved events
+        [data->window setAcceptsMouseMovedEvents:YES];
 
         // Finish launching app if not already
         [NSApp finishLaunching];
@@ -117,15 +154,100 @@ bool window_should_close(WindowHandle handle) {
 }
 
 void window_poll_events(WindowHandle handle) {
-    (void)handle;
+    if (!handle) return;
+    auto* data = reinterpret_cast<CocoaWindowData*>(handle);
+    auto& input = pebble::get_input_state_mut();
+
+    // Reset per-frame states
+    input.begin_frame();
+
     @autoreleasepool {
         NSEvent* event;
         while ((event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                            untilDate:nil
                                               inMode:NSDefaultRunLoopMode
                                              dequeue:YES])) {
-            [NSApp sendEvent:event];
-            [NSApp updateWindows];
+
+            NSEventType type = [event type];
+
+            switch (type) {
+                case NSEventTypeMouseMoved:
+                case NSEventTypeLeftMouseDragged:
+                case NSEventTypeRightMouseDragged:
+                case NSEventTypeOtherMouseDragged: {
+                    // Convert from Cocoa (bottom-left origin) to screen coords (top-left origin)
+                    NSPoint loc = [event locationInWindow];
+                    NSRect contentRect = [data->metalView frame];
+                    float new_x = (float)loc.x;
+                    float new_y = (float)(contentRect.size.height - loc.y);
+                    input.mouse_dx += new_x - input.mouse_x;
+                    input.mouse_dy += new_y - input.mouse_y;
+                    input.mouse_x = new_x;
+                    input.mouse_y = new_y;
+                    break;
+                }
+
+                case NSEventTypeLeftMouseDown:
+                    input.mouse_left_down = true;
+                    input.mouse_left_pressed = true;
+                    break;
+
+                case NSEventTypeLeftMouseUp:
+                    input.mouse_left_down = false;
+                    input.mouse_left_released = true;
+                    break;
+
+                case NSEventTypeRightMouseDown:
+                    input.mouse_right_down = true;
+                    input.mouse_right_pressed = true;
+                    break;
+
+                case NSEventTypeRightMouseUp:
+                    input.mouse_right_down = false;
+                    input.mouse_right_released = true;
+                    break;
+
+                case NSEventTypeOtherMouseDown:
+                    input.mouse_middle_down = true;
+                    break;
+
+                case NSEventTypeOtherMouseUp:
+                    input.mouse_middle_down = false;
+                    break;
+
+                case NSEventTypeScrollWheel:
+                    input.scroll_dy += (float)[event scrollingDeltaY];
+                    break;
+
+                case NSEventTypeKeyDown: {
+                    if (![event isARepeat]) {
+                        uint8_t key = cocoa_keycode_to_ascii([event keyCode]);
+                        if (key > 0) {
+                            input.keys[key] = true;
+                            input.keys_pressed[key] = true;
+                        }
+                    }
+                    break;
+                }
+
+                case NSEventTypeKeyUp: {
+                    uint8_t key = cocoa_keycode_to_ascii([event keyCode]);
+                    if (key > 0) {
+                        input.keys[key] = false;
+                    }
+                    break;
+                }
+
+                default:
+                    break;
+            }
+
+            // Only forward non-key events to Cocoa — we handle keys ourselves
+            // Forwarding key events causes Cocoa to beep and can delay processing
+            if (type != NSEventTypeKeyDown && type != NSEventTypeKeyUp) {
+                [NSApp sendEvent:event];
+                [NSApp updateWindows];
+            }
         }
     }
 }
