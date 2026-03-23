@@ -37,6 +37,7 @@ enum Key : uint8_t {
     KEY_1 = 49, KEY_2 = 50, KEY_3 = 51, KEY_4 = 52,
     KEY_W = 119, KEY_A = 97, KEY_S = 115, KEY_D = 100,
     KEY_P = 112, KEY_R = 114,
+    KEY_F1 = 128,
 };
 
 // Global input state accessor (set by platform layer)

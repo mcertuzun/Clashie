@@ -64,6 +64,7 @@ add_library(pebble_framework STATIC
     src/framework/tile_map.cpp
     src/framework/flow_field.cpp
     src/framework/ui.cpp
+    src/framework/particle.cpp
 )
 
 target_link_libraries(pebble_framework PUBLIC pebble_gfx)

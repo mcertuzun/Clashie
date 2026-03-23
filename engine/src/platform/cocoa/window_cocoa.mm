@@ -20,6 +20,7 @@ static uint8_t cocoa_keycode_to_ascii(unsigned short keyCode) {
         case 0x15: return '4';  // kVK_ANSI_4
         case 0x31: return ' ';  // kVK_Space
         case 0x35: return 27;   // kVK_Escape
+        case 0x7A: return 128;  // kVK_F1
         default:   return 0;
     }
 }
@@ -151,6 +152,14 @@ bool window_should_close(WindowHandle handle) {
     if (!handle) return true;
     auto* data = reinterpret_cast<CocoaWindowData*>(handle);
     return data->shouldClose;
+}
+
+void window_get_size(WindowHandle handle, int32_t* w, int32_t* h) {
+    if (!handle) { *w = 0; *h = 0; return; }
+    auto* data = reinterpret_cast<CocoaWindowData*>(handle);
+    NSRect frame = [[data->window contentView] frame];
+    *w = static_cast<int32_t>(frame.size.width);
+    *h = static_cast<int32_t>(frame.size.height);
 }
 
 void window_poll_events(WindowHandle handle) {

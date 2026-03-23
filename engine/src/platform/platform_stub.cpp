@@ -10,6 +10,7 @@ namespace pebble::platform {
 WindowHandle window_create(const WindowConfig&) { return 0; }
 void window_destroy(WindowHandle) {}
 bool window_should_close(WindowHandle) { return false; }
+void window_get_size(WindowHandle, int32_t* w, int32_t* h) { *w = 1280; *h = 720; }
 void window_poll_events(WindowHandle) {}
 void window_swap_buffers(WindowHandle) {}
 

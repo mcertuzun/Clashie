@@ -27,6 +27,9 @@ bool          window_should_close(WindowHandle handle);
 void          window_poll_events(WindowHandle handle);
 void          window_swap_buffers(WindowHandle handle);
 
+// Window size (logical points, not pixels — for UI/input)
+void          window_get_size(WindowHandle handle, int32_t* w, int32_t* h);
+
 // Timing
 int64_t       time_now_ns();
 void          time_sleep_ms(int32_t ms);
