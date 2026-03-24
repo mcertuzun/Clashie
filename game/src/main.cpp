@@ -11,6 +11,8 @@
 #include "miniclash/simulation.h"
 #include "miniclash/replay.h"
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include <sys/stat.h>
 #include <memory>
@@ -21,6 +23,33 @@ using namespace pebble::gfx;
 using namespace miniclash;
 
 static constexpr int64_t FIXED_DT_NS = 50'000'000;
+
+// Base zone: 24x24 area centered in the 40x40 grid (rows 8-31, cols 8-31)
+static constexpr int BASE_ZONE_MIN = 8;
+static constexpr int BASE_ZONE_MAX = 32; // exclusive
+// BASE_ZONE_SIZE = BASE_ZONE_MAX - BASE_ZONE_MIN = 24
+
+static bool in_base_zone(int gx, int gy) {
+    return gx >= BASE_ZONE_MIN && gx < BASE_ZONE_MAX &&
+           gy >= BASE_ZONE_MIN && gy < BASE_ZONE_MAX;
+}
+
+static bool in_deploy_zone(int gx, int gy) {
+    return gx >= 0 && gx < GRID_SIZE && gy >= 0 && gy < GRID_SIZE && !in_base_zone(gx, gy);
+}
+
+// Check that ALL tiles of a building of given size at (gx,gy) fall within the base zone
+static bool building_fits_in_base_zone(int gx, int gy, int sz) {
+    return gx >= BASE_ZONE_MIN && (gx + sz) <= BASE_ZONE_MAX &&
+           gy >= BASE_ZONE_MIN && (gy + sz) <= BASE_ZONE_MAX;
+}
+
+// Check if a base zone tile is on the edge (adjacent to deploy zone)
+static bool is_base_zone_edge(int gx, int gy) {
+    if (!in_base_zone(gx, gy)) return false;
+    return gx == BASE_ZONE_MIN || gx == BASE_ZONE_MAX - 1 ||
+           gy == BASE_ZONE_MIN || gy == BASE_ZONE_MAX - 1;
+}
 
 // --- Game States ---
 
@@ -102,10 +131,21 @@ struct EditorState {
         }
     }
 
+    bool has_building_type(BuildingType type) const {
+        for (int i = 0; i < building_count; ++i) {
+            if (static_cast<BuildingType>(current_layout.buildings[i].type) == type)
+                return true;
+        }
+        return false;
+    }
+
     bool try_place(BuildingType type, int gx, int gy) {
         if (building_count >= 64) return false;
+        if (type == BuildingType::TOWN_HALL && has_building_type(BuildingType::TOWN_HALL))
+            return false;
         const auto& data = get_building_data(type);
         int sz = data.size;
+        if (!building_fits_in_base_zone(gx, gy, sz)) return false;
         if (!editor_grid.can_place(gx, gy, sz, sz)) return false;
         editor_grid.place(gx, gy, sz, sz, (uint16_t)(building_count + 1));
         auto& bp = current_layout.buildings[building_count];
@@ -162,6 +202,34 @@ static const char* building_type_name(BuildingType type) {
         default:                           return "Unknown";
     }
 }
+
+// Uppercase short names for bitmap font UI
+static const char* building_type_label(BuildingType type) {
+    switch (type) {
+        case BuildingType::TOWN_HALL:      return "TOWN HALL";
+        case BuildingType::CANNON:         return "CANNON";
+        case BuildingType::ARCHER_TOWER:   return "ARCHER TWR";
+        case BuildingType::MORTAR:         return "MORTAR";
+        case BuildingType::GOLD_STORAGE:   return "GOLD STOR";
+        case BuildingType::ELIXIR_STORAGE: return "ELIX STOR";
+        case BuildingType::WALL:           return "WALL";
+        case BuildingType::BUILDER_HUT:    return "BUILDER";
+        default:                           return "UNKNOWN";
+    }
+}
+
+// Short troop labels for HUD buttons
+static const char* troop_short_label(TroopType type) {
+    switch (type) {
+        case TroopType::BARBARIAN:    return "BARB";
+        case TroopType::ARCHER:       return "ARCH";
+        case TroopType::GIANT:        return "GIANT";
+        case TroopType::WALL_BREAKER: return "WBRK";
+        default:                      return "?";
+    }
+}
+
+
 
 static BuildingType building_slot_type(int slot) {
     switch (slot) {
@@ -409,8 +477,9 @@ int main() {
     // The base layout that will be used for attacks (starts with default test base)
     BaseLayout active_base_layout = create_test_base();
 
-    // Simulation
-    Simulation sim;
+    // Simulation (heap allocated — too large for WASM stack)
+    auto sim_ptr = std::make_unique<Simulation>();
+    auto& sim = *sim_ptr;
     sim.init();
     sim.load_base(active_base_layout);
 
@@ -537,10 +606,12 @@ int main() {
         // --- MODE-SPECIFIC INPUT ---
 
         if (game_mode == MODE_READY) {
-            // E to enter editor mode ('e' = 101)
-            if (input.keys_pressed[101]) {
+            // E to enter editor mode
+            if (input.keys_pressed[KEY_E]) {
                 editor.load_from_layout(active_base_layout);
                 game_mode = MODE_EDITING;
+                camera.set_position(0, 640);
+                camera.set_zoom(1.0f);
                 log_info("Entering Base Editor. Left-click to place, right-click to remove.");
                 log_info("  1-8: Select building type. SPACE: Confirm and return. C: Clear all.");
             }
@@ -548,6 +619,8 @@ int main() {
             // SPACE to start attack
             if (input.keys_pressed[KEY_SPACE]) {
                 game_mode = MODE_ATTACKING;
+                camera.set_position(0, 640);
+                camera.set_zoom(1.0f);
                 sim.start_attack();
 
                 // Start recording replay
@@ -596,8 +669,8 @@ int main() {
                 log_info("[EDITOR] Selected: %s", building_type_name(editor.selected_building));
             }
 
-            // C to clear all ('c' = 99)
-            if (input.keys_pressed[99]) {
+            // C to clear all
+            if (input.keys_pressed[KEY_C]) {
                 editor.clear();
                 log_info("[EDITOR] Cleared all buildings.");
             }
@@ -691,9 +764,13 @@ int main() {
                     float world_x, world_y;
                     camera.screen_to_world(input.mouse_x, input.mouse_y, world_x, world_y);
 
-                    // Only deploy within grid bounds
+                    // Only deploy within grid bounds and in deploy zone (outside base zone)
+                    int deploy_gx = (int)std::floor(world_x);
+                    int deploy_gy = (int)std::floor(world_y);
                     if (world_x >= 0 && world_x < GRID_SIZE && world_y >= 0 && world_y < GRID_SIZE) {
-                        if (army.count_for(selected_troop) > 0) {
+                        if (!in_deploy_zone(deploy_gx, deploy_gy)) {
+                            log_info("Cannot deploy inside the base zone! Deploy troops in the outer area.");
+                        } else if (army.count_for(selected_troop) > 0) {
                             army.try_deploy(selected_troop);
 
                             TickInput tick_in;
@@ -944,7 +1021,7 @@ int main() {
         camera.set_viewport(window_w, window_h);
         batch.begin(camera);
 
-        // Ground tiles — checkerboard pattern for visual clarity
+        // Ground tiles — checkerboard pattern with zone visual indicators
         for (int gy = 0; gy < GRID_SIZE; ++gy) {
             for (int gx = 0; gx < GRID_SIZE; ++gx) {
                 Sprite tile;
@@ -954,10 +1031,49 @@ int main() {
                 tile.height = Camera::TILE_HEIGHT;
                 tile.pivot_x = 0.5f; tile.pivot_y = 0.5f;
                 tile.u0 = 0; tile.v0 = 0; tile.u1 = 1; tile.v1 = 1;
-                tile.tint = { 255, 255, 255, 255 };
                 tile.atlas = ((gx + gy) % 2 == 0) ? grass_tex : grass_dark_tex;
                 tile.layer = LAYER_TERRAIN;
                 tile.flip_x = false;
+
+                // Zone-based tinting
+                if (game_mode == MODE_EDITING) {
+                    if (in_base_zone(gx, gy)) {
+                        // Base zone in editor: bright green (buildable)
+                        if (is_base_zone_edge(gx, gy)) {
+                            tile.tint = { 180, 220, 180, 255 }; // Edge highlight
+                        } else {
+                            tile.tint = { 255, 255, 255, 255 }; // Normal
+                        }
+                    } else {
+                        // Deploy zone in editor: dark/dim (can't build here)
+                        tile.tint = { 120, 120, 140, 255 };
+                    }
+                } else if (game_mode == MODE_ATTACKING) {
+                    if (in_base_zone(gx, gy)) {
+                        // Base zone in attack: normal
+                        if (is_base_zone_edge(gx, gy)) {
+                            tile.tint = { 180, 220, 180, 255 }; // Edge highlight
+                        } else {
+                            tile.tint = { 255, 255, 255, 255 };
+                        }
+                    } else {
+                        // Deploy zone in attack: subtle highlight (deploy troops here)
+                        tile.tint = { 220, 220, 255, 255 };
+                    }
+                } else {
+                    // All other modes: default zone coloring
+                    if (in_base_zone(gx, gy)) {
+                        if (is_base_zone_edge(gx, gy)) {
+                            tile.tint = { 180, 220, 180, 255 };
+                        } else {
+                            tile.tint = { 255, 255, 255, 255 };
+                        }
+                    } else {
+                        // Deploy zone: slightly blue tint
+                        tile.tint = { 200, 200, 255, 255 };
+                    }
+                }
+
                 batch.draw(tile);
             }
         }
@@ -995,7 +1111,11 @@ int main() {
                 int gy = editor.ghost_y;
                 const auto& data = get_building_data(editor.selected_building);
                 int sz = data.size;
-                bool valid = editor.editor_grid.can_place(gx, gy, sz, sz);
+                bool unique_ok = !(editor.selected_building == BuildingType::TOWN_HALL &&
+                                   editor.has_building_type(BuildingType::TOWN_HALL));
+                bool valid = unique_ok &&
+                             building_fits_in_base_zone(gx, gy, sz) &&
+                             editor.editor_grid.can_place(gx, gy, sz, sz);
 
                 // Only draw ghost if mouse is roughly in bounds
                 if (gx >= 0 && gy >= 0 && gx + sz <= GRID_SIZE && gy + sz <= GRID_SIZE) {
@@ -1080,6 +1200,16 @@ int main() {
 
         batch.flush();
 
+        if (game_mode == MODE_EDITING) {
+            static int dbg_count = 0;
+            if (dbg_count++ % 60 == 0) {
+                log_info("EDITOR DBG: sprites=%u draws=%u cam=(%.0f,%.0f) zoom=%.2f vp=%dx%d",
+                    batch.sprite_count(), batch.draw_call_count(),
+                    camera.pos_x(), camera.pos_y(), camera.zoom(),
+                    camera.viewport_w(), camera.viewport_h());
+            }
+        }
+
         // === UI RENDERING (after batch.flush, before end_frame) ===
 
         pebble::ui::ui_begin(ui_ctx, renderer, window_w, window_h);
@@ -1097,7 +1227,7 @@ int main() {
             pebble::ui::draw_rect(ui_ctx, 0, sh - 60.0f, sw, 60.0f, 0, 0, 0, 160);
 
             // Centered banner with two options
-            float banner_w = 320.0f, banner_h = 100.0f;
+            float banner_w = 500.0f, banner_h = 60.0f;
             float banner_x = (sw - banner_w) / 2.0f;
             float banner_y = (sh - banner_h) / 2.0f;
 
@@ -1106,57 +1236,51 @@ int main() {
             pebble::ui::draw_rect_outline(ui_ctx, banner_x, banner_y, banner_w, banner_h,
                                           2.0f, 100, 200, 255, 255);
 
-            // --- [E] Edit Base button ---
-            float edit_btn_x = banner_x + 20.0f;
-            float edit_btn_y = banner_y + 12.0f;
-            float edit_btn_w = 130.0f;
-            float edit_btn_h = 32.0f;
+            // --- [E] EDIT BASE button ---
+            float btn_h = 40.0f;
+            float btn_y = banner_y + 10.0f;
 
-            pebble::ui::draw_rect(ui_ctx, edit_btn_x, edit_btn_y, edit_btn_w, edit_btn_h,
-                                  60, 120, 60, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, edit_btn_x, edit_btn_y, edit_btn_w, edit_btn_h,
-                                          1.5f, 120, 220, 120, 255);
-            // [E] key indicator
-            pebble::ui::draw_rect(ui_ctx, edit_btn_x + 8, edit_btn_y + 6, 20, 20,
-                                  100, 200, 100, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, edit_btn_x + 8, edit_btn_y + 6, 20, 20,
-                                          1.5f, 200, 255, 200, 255);
-            // "EDIT" label as 4 blocks
-            for (int i = 0; i < 4; ++i) {
-                pebble::ui::draw_rect(ui_ctx, edit_btn_x + 38 + i * 22.0f, edit_btn_y + 8,
-                                      18.0f, 16.0f, 180, 255, 180, 255);
+            if (pebble::ui::draw_text_button(ui_ctx, banner_x + 10, btn_y,
+                                              230, btn_h,
+                                              "[E] EDIT BASE",
+                                              60, 120, 60)) {
+                editor.load_from_layout(active_base_layout);
+                game_mode = MODE_EDITING;
+                camera.set_position(0, 640);
+                camera.set_zoom(1.0f);
+                log_info("Entering Base Editor.");
             }
 
-            // --- [SPACE] Attack button ---
-            float atk_btn_x = banner_x + 170.0f;
-            float atk_btn_y = banner_y + 12.0f;
-            float atk_btn_w = 130.0f;
-            float atk_btn_h = 32.0f;
+            // --- [SPACE] START ATTACK button ---
+            float atk_btn_w = 230.0f;
+            float atk_btn_h = btn_h;
+            float atk_btn_x = banner_x + 255;
+            float atk_btn_y = btn_y;
 
-            pebble::ui::draw_rect(ui_ctx, atk_btn_x, atk_btn_y, atk_btn_w, atk_btn_h,
-                                  80, 80, 160, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, atk_btn_x, atk_btn_y, atk_btn_w, atk_btn_h,
-                                          1.5f, 150, 150, 255, 255);
-            // Space bar shape
-            pebble::ui::draw_rect(ui_ctx, atk_btn_x + 8, atk_btn_y + 8, 40, 16,
-                                  120, 120, 220, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, atk_btn_x + 8, atk_btn_y + 8, 40, 16,
-                                          1.5f, 200, 200, 255, 255);
-            // "ATK" label as 3 blocks
-            for (int i = 0; i < 3; ++i) {
-                pebble::ui::draw_rect(ui_ctx, atk_btn_x + 58 + i * 22.0f, atk_btn_y + 8,
-                                      18.0f, 16.0f, 180, 180, 255, 255);
+            if (pebble::ui::draw_text_button(ui_ctx, atk_btn_x, atk_btn_y,
+                                              atk_btn_w, atk_btn_h,
+                                              "[SPACE] START ATTACK",
+                                              80, 80, 160)) {
+                game_mode = MODE_ATTACKING;
+                sim.start_attack();
+
+                replay_recorder = std::make_unique<ReplayRecorder>();
+                replay_recorder->set_seed(12345);
+                replay_recorder->set_engine_version(1);
+                replay_recorder->set_base_hash(sim.compute_state_hash());
+
+                audio.play(pebble::audio::SoundID::ATTACK_START);
+                log_info("Attack started! Deploy troops with left-click.");
             }
 
             // Building count hint
-            float hint_y = banner_y + 54.0f;
-            pebble::ui::draw_number(ui_ctx, banner_x + 100, hint_y, 14.0f,
-                                    active_base_layout.building_count,
-                                    200, 200, 200);
-            // "buildings" label as small blocks
-            for (int i = 0; i < 4; ++i) {
-                pebble::ui::draw_rect(ui_ctx, banner_x + 150 + i * 14.0f, hint_y + 2,
-                                      10.0f, 10.0f, 160, 160, 160, 255);
+            float hint_y = banner_y + banner_h + 8.0f;
+            {
+                char bcount_str[32];
+                snprintf(bcount_str, sizeof(bcount_str), "%d BUILDINGS",
+                         (int)active_base_layout.building_count);
+                pebble::ui::draw_text(ui_ctx, banner_x + 130.0f, hint_y, 14.0f,
+                                      bcount_str, 200, 200, 200);
             }
 
             // Stars above banner
@@ -1174,111 +1298,91 @@ int main() {
             pebble::ui::draw_rect_outline(ui_ctx, 0, 0, sw, top_bar_h,
                                           2.0f, 60, 180, 60, 255);
 
-            // "BASE EDITOR" as 10 colored blocks
-            for (int i = 0; i < 10; ++i) {
-                pebble::ui::draw_rect(ui_ctx, sw / 2.0f - 110.0f + i * 22.0f, 10.0f,
-                                      18.0f, 20.0f, 100, 255, 100, 255);
+            // "BASE EDITOR" text centered (11 chars * char_w at height 22; char aspect ~5:7)
+            {
+                float char_h = 22.0f;
+                float char_w = char_h * (5.0f / 7.0f);
+                float spacing = char_w * 0.2f;
+                float text_w = 11.0f * (char_w + spacing);
+                pebble::ui::draw_text(ui_ctx, (sw - text_w) / 2.0f, 9.0f, char_h,
+                                      "BASE EDITOR", 100, 255, 100);
             }
 
             // Building count (top-right)
-            pebble::ui::draw_number(ui_ctx, sw - 100.0f, 8.0f, 22.0f,
-                                    editor.building_count, 255, 255, 255);
-            // "/64" indicator
-            pebble::ui::draw_rect(ui_ctx, sw - 50.0f, 14.0f, 4.0f, 14.0f,
-                                  180, 180, 180, 255); // slash
-            pebble::ui::draw_number(ui_ctx, sw - 42.0f, 8.0f, 22.0f,
-                                    64, 180, 180, 180);
+            {
+                char count_str[32];
+                snprintf(count_str, sizeof(count_str), "%d/64", editor.building_count);
+                pebble::ui::draw_text(ui_ctx, sw - 110.0f, 10.0f, 20.0f,
+                                      count_str, 255, 255, 255);
+            }
 
-            // --- BOTTOM PANEL: Building palette ---
-            float bottom_bar_h = 90.0f;
+            // --- BOTTOM PANEL: Building palette (2 rows of 4) ---
+            float bottom_bar_h = 130.0f;
             float bottom_bar_y = sh - bottom_bar_h;
             pebble::ui::draw_rect(ui_ctx, 0, bottom_bar_y, sw, bottom_bar_h,
                                   0, 0, 0, 200);
             pebble::ui::draw_rect_outline(ui_ctx, 0, bottom_bar_y, sw, bottom_bar_h,
                                           2.0f, 60, 120, 60, 255);
 
-            // 8 building type buttons
-            float btn_w = 60.0f;
-            float btn_h = 50.0f;
+            // 8 building buttons in 2 rows of 4
+            float btn_w = 150.0f;
+            float btn_h = 36.0f;
             float btn_spacing = 8.0f;
-            float total_btns_w = 8.0f * btn_w + 7.0f * btn_spacing;
-            float btn_start_x = (sw - total_btns_w) / 2.0f;
-            float btn_y = bottom_bar_y + 8.0f;
+            float row_w = 4.0f * btn_w + 3.0f * btn_spacing;
+            float btn_start_x = (sw - row_w) / 2.0f;
 
             for (int slot = 0; slot < 8; ++slot) {
+                int row = slot / 4;
+                int col = slot % 4;
                 BuildingType slot_type = building_slot_type(slot);
                 Color bc = building_color(slot_type);
                 bool is_selected = (editor.selected_building == slot_type);
-                float bx = btn_start_x + (float)slot * (btn_w + btn_spacing);
+                float bx = btn_start_x + (float)col * (btn_w + btn_spacing);
+                float by = bottom_bar_y + 6.0f + (float)row * (btn_h + 4.0f);
 
-                // Draw the button — returns true if clicked
-                if (pebble::ui::draw_button(ui_ctx, bx, btn_y, btn_w, btn_h,
-                                            bc.r, bc.g, bc.b, is_selected)) {
+                // Button label: "N. NAME"
+                char label[32];
+                snprintf(label, sizeof(label), "%d.%s", slot + 1, building_type_label(slot_type));
+
+                if (pebble::ui::draw_text_button(ui_ctx, bx, by, btn_w, btn_h,
+                                                  label,
+                                                  bc.r / 2, bc.g / 2, bc.b / 2,
+                                                  bc.r, bc.g, bc.b, is_selected)) {
                     editor.selected_building = slot_type;
                     log_info("[EDITOR] Selected: %s", building_type_name(slot_type));
                 }
-
-                // Draw key number on button (1-8)
-                pebble::ui::draw_number(ui_ctx, bx + 24.0f, btn_y + 32.0f, 12.0f,
-                                        slot + 1, 255, 255, 255);
             }
 
             // Hint text row below buttons
-            float hint_y = btn_y + btn_h + 6.0f;
+            float hint_y = bottom_bar_y + 6.0f + 2.0f * (btn_h + 4.0f) + 6.0f;
+            float hint_spacing = sw / 3.0f;
 
-            // "SPACE: Confirm" hint (left side)
-            pebble::ui::draw_rect(ui_ctx, btn_start_x, hint_y, 40.0f, 14.0f,
-                                  80, 160, 80, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_start_x, hint_y, 40.0f, 14.0f,
-                                          1.0f, 150, 255, 150, 255);
-            // "DONE" label as 4 blocks
-            for (int i = 0; i < 4; ++i) {
-                pebble::ui::draw_rect(ui_ctx, btn_start_x + 48 + i * 14.0f, hint_y + 1,
-                                      10.0f, 12.0f, 150, 255, 150, 255);
-            }
-
-            // "C: Clear" hint (center)
-            float clear_x = sw / 2.0f - 40.0f;
-            pebble::ui::draw_rect(ui_ctx, clear_x, hint_y, 18.0f, 14.0f,
-                                  200, 80, 80, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, clear_x, hint_y, 18.0f, 14.0f,
-                                          1.0f, 255, 150, 150, 255);
-            // "CLEAR" label as 5 blocks
-            for (int i = 0; i < 5; ++i) {
-                pebble::ui::draw_rect(ui_ctx, clear_x + 24 + i * 14.0f, hint_y + 1,
-                                      10.0f, 12.0f, 255, 150, 150, 255);
-            }
-
-            // "ESC: Cancel" hint (right side)
-            float esc_x = sw - btn_start_x - 140.0f;
-            pebble::ui::draw_rect(ui_ctx, esc_x, hint_y, 28.0f, 14.0f,
-                                  120, 120, 120, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, esc_x, hint_y, 28.0f, 14.0f,
-                                          1.0f, 200, 200, 200, 255);
-            // "CANCEL" label as 6 blocks
-            for (int i = 0; i < 6; ++i) {
-                pebble::ui::draw_rect(ui_ctx, esc_x + 34 + i * 14.0f, hint_y + 1,
-                                      10.0f, 12.0f, 200, 200, 200, 255);
-            }
+            pebble::ui::draw_text(ui_ctx, btn_start_x, hint_y, 12.0f,
+                                  "[SPACE] CONFIRM", 150, 255, 150);
+            pebble::ui::draw_text(ui_ctx, btn_start_x + hint_spacing, hint_y, 12.0f,
+                                  "[C] CLEAR", 255, 150, 150);
+            pebble::ui::draw_text(ui_ctx, btn_start_x + hint_spacing * 2.0f, hint_y, 12.0f,
+                                  "[ESC] CANCEL", 200, 200, 200);
 
             // --- Selected building info (top-left, below top bar) ---
             float info_y = top_bar_h + 8.0f;
-            pebble::ui::draw_rect(ui_ctx, 8.0f, info_y, 160.0f, 28.0f,
+            pebble::ui::draw_rect(ui_ctx, 8.0f, info_y, 200.0f, 28.0f,
                                   0, 0, 0, 160);
             Color sel_col = building_color(editor.selected_building);
             pebble::ui::draw_rect(ui_ctx, 12.0f, info_y + 4, 20.0f, 20.0f,
                                   sel_col.r, sel_col.g, sel_col.b, 255);
             pebble::ui::draw_rect_outline(ui_ctx, 12.0f, info_y + 4, 20.0f, 20.0f,
                                           1.5f, 255, 255, 255, 255);
-            // Building size indicator
-            const auto& sel_data = get_building_data(editor.selected_building);
-            pebble::ui::draw_number(ui_ctx, 40.0f, info_y + 6, 16.0f,
-                                    sel_data.size, 255, 255, 255);
-            // "x" separator
-            pebble::ui::draw_rect(ui_ctx, 58.0f, info_y + 10, 6.0f, 6.0f,
-                                  200, 200, 200, 255);
-            pebble::ui::draw_number(ui_ctx, 70.0f, info_y + 6, 16.0f,
-                                    sel_data.size, 255, 255, 255);
+            // Building name and size indicator as text
+            {
+                const auto& sel_data = get_building_data(editor.selected_building);
+                char info_str[64];
+                snprintf(info_str, sizeof(info_str), "%s %dX%d",
+                         building_type_label(editor.selected_building),
+                         sel_data.size, sel_data.size);
+                pebble::ui::draw_text(ui_ctx, 40.0f, info_y + 7.0f, 14.0f,
+                                      info_str, 255, 255, 255);
+            }
         }
         else if (game_mode == MODE_ATTACKING) {
             // --- TOP BAR ---
@@ -1303,29 +1407,28 @@ int main() {
                                    seconds_remaining,
                                    255, 255, 255);
 
-            // Right: Destruction percentage
-            int destruction = sim.result().destruction_percent;
-            float dest_x = (float)window_w - 120.0f;
-            pebble::ui::draw_number(ui_ctx, dest_x, 10.0f, 28.0f,
-                                    destruction,
-                                    255, 200, 50);
-            float pct_x = dest_x + 80.0f;
-            pebble::ui::draw_rect(ui_ctx, pct_x, 18.0f, 12.0f, 12.0f,
-                                  255, 200, 50, 255);
+            // Right: Destruction percentage as text
+            {
+                int destruction = sim.result().destruction_percent;
+                char dest_str[16];
+                snprintf(dest_str, sizeof(dest_str), "%d%%", destruction);
+                pebble::ui::draw_text(ui_ctx, (float)window_w - 100.0f, 12.0f, 24.0f,
+                                      dest_str, 255, 200, 50);
+            }
 
             // --- BOTTOM BAR ---
-            float bottom_bar_h = 70.0f;
+            float bottom_bar_h = 80.0f;
             float bottom_bar_y = (float)window_h - bottom_bar_h;
             pebble::ui::draw_rect(ui_ctx, 0, bottom_bar_y,
                                   (float)window_w, bottom_bar_h,
                                   0, 0, 0, 180);
 
-            // Troop selection buttons (4 slots)
-            float btn_w = 60.0f;
-            float btn_h = 50.0f;
+            // Troop selection buttons (4 slots) with text labels
+            float btn_w = 120.0f;
+            float btn_h = 55.0f;
             float btn_spacing = 10.0f;
             float btn_start_x = 20.0f;
-            float btn_y = bottom_bar_y + 10.0f;
+            float btn_y = bottom_bar_y + 12.0f;
 
             for (int slot = 0; slot < 4; ++slot) {
                 TroopType slot_type = troop_slot_type(slot);
@@ -1333,15 +1436,26 @@ int main() {
                 bool is_selected = (selected_troop == slot_type);
                 float bx = btn_start_x + (float)slot * (btn_w + btn_spacing);
 
-                if (pebble::ui::draw_button(ui_ctx, bx, btn_y, btn_w, btn_h,
-                                            tc.r, tc.g, tc.b, is_selected)) {
+                // Draw button with troop short name
+                if (pebble::ui::draw_text_button(ui_ctx, bx, btn_y, btn_w, btn_h,
+                                                  troop_short_label(slot_type),
+                                                  tc.r / 3, tc.g / 3, tc.b / 3,
+                                                  tc.r, tc.g, tc.b, is_selected)) {
                     selected_troop = slot_type;
+                    audio.play(pebble::audio::SoundID::BUTTON_CLICK);
                 }
 
+                // Show remaining count BELOW the name with smaller font
                 int remaining = army.count_for(slot_type);
-                pebble::ui::draw_number(ui_ctx, bx + 18.0f, btn_y + 30.0f, 14.0f,
-                                        remaining,
-                                        255, 255, 255);
+                {
+                    char rem_str[8];
+                    snprintf(rem_str, sizeof(rem_str), "X%d", remaining);
+                    float digit_h = 10.0f;
+                    float text_w = (float)strlen(rem_str) * digit_h * (5.0f / 7.0f) * 1.2f;
+                    pebble::ui::draw_text(ui_ctx, bx + (btn_w - text_w) / 2.0f,
+                                          btn_y + btn_h - 14.0f, digit_h,
+                                          rem_str, 255, 255, 255);
+                }
 
                 if (remaining == 0) {
                     pebble::ui::draw_rect(ui_ctx, bx, btn_y, btn_w, btn_h,
@@ -1349,15 +1463,16 @@ int main() {
                 }
             }
 
-            // "END ATTACK" button on far right (red)
-            float end_btn_w = 100.0f;
+            // "END ATTACK" text button on far right (red)
+            float end_btn_w = 130.0f;
             float end_btn_h = 50.0f;
             float end_btn_x = (float)window_w - end_btn_w - 20.0f;
             float end_btn_y = bottom_bar_y + 10.0f;
 
-            if (pebble::ui::draw_button(ui_ctx, end_btn_x, end_btn_y,
-                                        end_btn_w, end_btn_h,
-                                        200, 40, 40, false)) {
+            if (pebble::ui::draw_text_button(ui_ctx, end_btn_x, end_btn_y,
+                                              end_btn_w, end_btn_h,
+                                              "END ATTACK",
+                                              200, 40, 40)) {
                 game_mode = MODE_RESULT;
 
                 if (replay_recorder) {
@@ -1374,19 +1489,24 @@ int main() {
                 float hp_ratio = fp_to_float(b.hp) / fp_to_float(b.max_hp);
                 if (hp_ratio < 1.0f) {
                     Vec2fp center = b.center();
-                    float center_wx = fp_to_float(center.x);
-                    float center_wy = fp_to_float(center.y);
-
                     float sx, sy;
-                    camera.world_to_screen(center_wx, center_wy, sx, sy);
+                    camera.world_to_screen(fp_to_float(center.x), fp_to_float(center.y), sx, sy);
+                    pebble::ui::draw_health_bar(ui_ctx, sx - 20.0f, sy - 20.0f,
+                                                40.0f, 6.0f, hp_ratio);
+                }
+            });
 
-                    float bar_w = 40.0f;
-                    float bar_h = 6.0f;
-                    pebble::ui::draw_health_bar(ui_ctx,
-                                                sx - bar_w / 2.0f,
-                                                sy - 20.0f,
-                                                bar_w, bar_h,
-                                                hp_ratio);
+            // --- HEALTH BARS ON TROOPS ---
+            sim.for_each_troop([&](const Troop& t) {
+                const auto& td = get_troop_data(t.type);
+                float hp_ratio = fp_to_float(t.hp) / fp_to_float(td.max_hp);
+                if (hp_ratio < 1.0f && hp_ratio > 0.0f) {
+                    float sx, sy;
+                    camera.world_to_screen(fp_to_float(t.pos.x), fp_to_float(t.pos.y), sx, sy);
+                    float bw = (t.type == TroopType::GIANT) ? 36.0f : 24.0f;
+                    float oy = (t.type == TroopType::GIANT) ? -22.0f : -14.0f;
+                    pebble::ui::draw_health_bar(ui_ctx, sx - bw / 2.0f, sy + oy,
+                                                bw, 4.0f, hp_ratio);
                 }
             });
         }
@@ -1400,91 +1520,87 @@ int main() {
 
             const auto& res = sim.result();
 
-            // Title bar
-            float title_h = 36.0f;
-            float title_y = sh * 0.18f;
-            pebble::ui::draw_rect(ui_ctx, sw * 0.25f, title_y, sw * 0.5f, title_h,
-                                  40, 40, 60, 220);
-            pebble::ui::draw_rect_outline(ui_ctx, sw * 0.25f, title_y, sw * 0.5f, title_h,
-                                          2.0f, 100, 100, 200, 255);
+            // Victory / Defeat title text
+            float title_y = sh * 0.15f;
+            if (res.stars >= 2) {
+                pebble::ui::draw_text(ui_ctx, sw / 2.0f - 70.0f, title_y, 24.0f,
+                                      "VICTORY!", 255, 220, 50);
+            } else {
+                pebble::ui::draw_text(ui_ctx, sw / 2.0f - 60.0f, title_y, 24.0f,
+                                      "DEFEAT", 220, 60, 60);
+            }
 
             // Big stars
             float star_size = 60.0f;
             float stars_x = (sw - star_size * 3.6f) / 2.0f;
-            float stars_y = sh * 0.30f;
+            float stars_y = sh * 0.25f;
             pebble::ui::draw_stars(ui_ctx, stars_x, stars_y, star_size, res.stars, 3);
 
-            // Destruction percentage
-            float pct_y = stars_y + star_size + 25.0f;
-            pebble::ui::draw_number(ui_ctx, sw / 2.0f - 50.0f, pct_y, 48.0f,
-                                    res.destruction_percent, 255, 220, 50);
-            float pct_x = sw / 2.0f + 55.0f;
-            pebble::ui::draw_rect(ui_ctx, pct_x, pct_y + 4, 10, 10, 255, 220, 50, 255);
-            pebble::ui::draw_rect(ui_ctx, pct_x + 14, pct_y + 28, 10, 10, 255, 220, 50, 255);
-            pebble::ui::draw_rect(ui_ctx, pct_x + 6, pct_y + 14, 12, 4, 255, 220, 50, 255);
-
-            // --- Button: [R] RESTART ---
-            float btn_w = 220.0f, btn_h = 44.0f;
-            float btn_x = (sw - btn_w) / 2.0f;
-            float btn1_y = pct_y + 80.0f;
-
-            pebble::ui::draw_rect(ui_ctx, btn_x, btn1_y, btn_w, btn_h, 50, 50, 120, 240);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_x, btn1_y, btn_w, btn_h, 2.0f,
-                                          120, 120, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, btn_x + 12, btn1_y + 8, 28, 28, 100, 100, 220, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_x + 12, btn1_y + 8, 28, 28, 1.5f,
-                                          200, 200, 255, 255);
-            float rx = btn_x + 18, ry = btn1_y + 12;
-            pebble::ui::draw_rect(ui_ctx, rx, ry, 3, 20, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, rx + 3, ry, 10, 3, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, rx + 13, ry + 3, 3, 6, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, rx + 3, ry + 8, 10, 3, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, rx + 8, ry + 11, 3, 9, 255, 255, 255, 255);
-
-            float lx = btn_x + 55;
-            const uint8_t lr = 200, lg = 200, lb = 255;
-            for (int i = 0; i < 7; ++i) {
-                pebble::ui::draw_rect(ui_ctx, lx + i * 22.0f, btn1_y + 13, 18, 18, lr, lg, lb, 255);
+            // Destruction percentage as text
+            float pct_y = stars_y + star_size + 20.0f;
+            {
+                char pct_str[32];
+                snprintf(pct_str, sizeof(pct_str), "%d%% DESTROYED", res.destruction_percent);
+                // Roughly center the text
+                float approx_w = (float)(strlen(pct_str)) * 24.0f * (5.0f / 7.0f);
+                pebble::ui::draw_text(ui_ctx, (sw - approx_w) / 2.0f, pct_y, 24.0f,
+                                      pct_str, 255, 220, 50);
             }
 
-            // --- Button: [SPACE] NEW ATTACK ---
+            // --- Button: [R] RESTART (blue) ---
+            float btn_w = 260.0f, btn_h = 44.0f;
+            float btn_x = (sw - btn_w) / 2.0f;
+            float btn1_y = pct_y + 60.0f;
+
+            if (pebble::ui::draw_text_button(ui_ctx, btn_x, btn1_y, btn_w, btn_h,
+                                              "[R] RESTART",
+                                              50, 50, 120)) {
+                sim.init();
+                sim.load_base(active_base_layout);
+                army.reset();
+                accumulator = 0;
+                game_mode = MODE_READY;
+                selected_troop = TroopType::BARBARIAN;
+                log_info("Restarted! Scout the base and press SPACE to attack.");
+            }
+
+            // --- Button: [SPACE] NEW GAME (green) ---
             float btn2_y = btn1_y + btn_h + 12.0f;
 
-            pebble::ui::draw_rect(ui_ctx, btn_x, btn2_y, btn_w, btn_h, 50, 120, 50, 240);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_x, btn2_y, btn_w, btn_h, 2.0f,
-                                          120, 255, 120, 255);
-            pebble::ui::draw_rect(ui_ctx, btn_x + 12, btn2_y + 12, 50, 20, 100, 220, 100, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_x + 12, btn2_y + 12, 50, 20, 1.5f,
-                                          200, 255, 200, 255);
-
-            float lx2 = btn_x + 75;
-            const uint8_t lr2 = 200, lg2 = 255, lb2 = 200;
-            for (int i = 0; i < 8; ++i) {
-                float w2 = (i == 3) ? 8.0f : 18.0f;
-                pebble::ui::draw_rect(ui_ctx, lx2, btn2_y + 13, w2, 18, lr2, lg2, lb2, (i == 3) ? (uint8_t)0 : (uint8_t)255);
-                lx2 += w2 + 4.0f;
+            if (pebble::ui::draw_text_button(ui_ctx, btn_x, btn2_y, btn_w, btn_h,
+                                              "[SPACE] NEW GAME",
+                                              50, 120, 50)) {
+                sim.init();
+                sim.load_base(active_base_layout);
+                army.reset();
+                accumulator = 0;
+                game_mode = MODE_READY;
+                selected_troop = TroopType::BARBARIAN;
+                log_info("New attack! Scout the base and press SPACE to attack.");
             }
 
-            // --- Button: [W] WATCH REPLAY ---
+            // --- Button: [W] WATCH REPLAY (purple) ---
             float btn3_y = btn2_y + btn_h + 12.0f;
 
-            pebble::ui::draw_rect(ui_ctx, btn_x, btn3_y, btn_w, btn_h, 120, 50, 120, 240);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_x, btn3_y, btn_w, btn_h, 2.0f,
-                                          200, 120, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, btn_x + 12, btn3_y + 8, 28, 28, 180, 100, 220, 255);
-            pebble::ui::draw_rect_outline(ui_ctx, btn_x + 12, btn3_y + 8, 28, 28, 1.5f,
-                                          220, 180, 255, 255);
-            float wx = btn_x + 18, wy = btn3_y + 12;
-            pebble::ui::draw_rect(ui_ctx, wx, wy, 3, 16, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, wx + 6, wy + 10, 3, 6, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, wx + 10, wy + 10, 3, 6, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, wx + 16, wy, 3, 16, 255, 255, 255, 255);
-            pebble::ui::draw_rect(ui_ctx, wx + 3, wy + 16, 14, 3, 255, 255, 255, 255);
+            if (pebble::ui::draw_text_button(ui_ctx, btn_x, btn3_y, btn_w, btn_h,
+                                              "[W] WATCH REPLAY",
+                                              90, 50, 130)) {
+                replay_player = std::make_unique<ReplayPlayer>();
+                if (replay_player->load_from_file(REPLAY_PATH)) {
+                    sim.init();
+                    sim.load_base(active_base_layout);
+                    sim.start_attack();
 
-            float lx3 = btn_x + 55;
-            const uint8_t lr3 = 220, lg3 = 180, lb3 = 255;
-            for (int i = 0; i < 6; ++i) {
-                pebble::ui::draw_rect(ui_ctx, lx3 + i * 22.0f, btn3_y + 13, 18, 18, lr3, lg3, lb3, 255);
+                    replay_tick = 0;
+                    replay_tick_accum = 0.0f;
+                    replay_player->set_speed(1.0f);
+                    game_mode = MODE_REPLAY;
+                    log_info("[REPLAY] Playback started (%u ticks, speed: %.0fx)",
+                             replay_player->tick_count(), replay_player->speed());
+                } else {
+                    log_info("[REPLAY] No replay file found!");
+                    replay_player.reset();
+                }
             }
         }
         else if (game_mode == MODE_REPLAY) {
@@ -1507,14 +1623,16 @@ int main() {
             pebble::ui::draw_timer(ui_ctx, timer_x, 7.0f, timer_h,
                                    seconds_remaining, 255, 255, 255);
 
-            int destruction = sim.result().destruction_percent;
-            float dest_x = sw - 120.0f;
-            pebble::ui::draw_number(ui_ctx, dest_x, 10.0f, 28.0f,
-                                    destruction, 255, 200, 50);
-            pebble::ui::draw_rect(ui_ctx, dest_x + 80.0f, 18.0f, 12.0f, 12.0f,
-                                  255, 200, 50, 255);
+            // Destruction percentage as text
+            {
+                int destruction = sim.result().destruction_percent;
+                char dest_str[16];
+                snprintf(dest_str, sizeof(dest_str), "%d%%", destruction);
+                pebble::ui::draw_text(ui_ctx, sw - 100.0f, 12.0f, 24.0f,
+                                      dest_str, 255, 200, 50);
+            }
 
-            // REPLAY BANNER
+            // REPLAY BANNER with text
             float banner_w = 140.0f, banner_h = 32.0f;
             float banner_x = sw - banner_w - 10.0f;
             float banner_y = top_bar_h + 8.0f;
@@ -1524,40 +1642,62 @@ int main() {
             pebble::ui::draw_rect_outline(ui_ctx, banner_x, banner_y, banner_w, banner_h,
                                           2.0f, 255, 100, 100, 255);
 
-            for (int i = 0; i < 6; ++i) {
-                pebble::ui::draw_rect(ui_ctx, banner_x + 10 + i * 20.0f, banner_y + 7,
-                                      16.0f, 18.0f, 255, 220, 220, 255);
-            }
+            pebble::ui::draw_text(ui_ctx, banner_x + 25.0f, banner_y + 7.0f, 20.0f,
+                                  "REPLAY", 255, 220, 220);
 
-            // Speed indicator
+            // Speed indicator as text
             float speed_y = banner_y + banner_h + 6.0f;
             float current_speed = replay_player ? replay_player->speed() : 1.0f;
             int speed_int = (int)current_speed;
 
             pebble::ui::draw_rect(ui_ctx, banner_x, speed_y, banner_w, 22.0f,
                                   0, 0, 0, 160);
-
-            for (int i = 0; i < speed_int && i < 8; ++i) {
-                pebble::ui::draw_rect(ui_ctx, banner_x + 6 + i * 16.0f, speed_y + 4,
-                                      12.0f, 14.0f, 100, 255, 100, 255);
+            {
+                char speed_str[16];
+                snprintf(speed_str, sizeof(speed_str), "SPEED: %dX", speed_int);
+                pebble::ui::draw_text(ui_ctx, banner_x + 8.0f, speed_y + 4.0f, 14.0f,
+                                      speed_str, 100, 255, 100);
             }
 
-            // Bottom bar
+            // Bottom bar with speed buttons and exit button
             float bottom_bar_h = 40.0f;
             float bottom_bar_y = (float)window_h - bottom_bar_h;
             pebble::ui::draw_rect(ui_ctx, 0, bottom_bar_y, sw, bottom_bar_h,
                                   0, 0, 0, 160);
 
+            // Speed buttons: 1X, 2X, 4X, 8X
+            const char* speed_labels[] = { "1X", "2X", "4X", "8X" };
             for (int i = 0; i < 4; ++i) {
-                float kx = 20.0f + i * 50.0f;
-                float ky = bottom_bar_y + 8.0f;
+                float kx = 20.0f + i * 70.0f;
+                float ky = bottom_bar_y + 6.0f;
                 bool active = (speed_int == (1 << i));
-                uint8_t kr = active ? (uint8_t)100 : (uint8_t)60;
-                uint8_t kg = active ? (uint8_t)255 : (uint8_t)100;
-                uint8_t kb = active ? (uint8_t)100 : (uint8_t)60;
-                pebble::ui::draw_rect(ui_ctx, kx, ky, 24.0f, 24.0f, kr, kg, kb, 255);
-                pebble::ui::draw_rect_outline(ui_ctx, kx, ky, 24.0f, 24.0f, 1.5f,
-                                              160, 255, 160, 255);
+
+                if (pebble::ui::draw_text_button(ui_ctx, kx, ky, 60.0f, 28.0f,
+                                                  speed_labels[i],
+                                                  active ? (uint8_t)40 : (uint8_t)30,
+                                                  active ? (uint8_t)100 : (uint8_t)40,
+                                                  active ? (uint8_t)40 : (uint8_t)30,
+                                                  active ? (uint8_t)100 : (uint8_t)160,
+                                                  active ? (uint8_t)255 : (uint8_t)200,
+                                                  active ? (uint8_t)100 : (uint8_t)160,
+                                                  active)) {
+                    if (replay_player) {
+                        replay_player->set_speed((float)(1 << i));
+                        log_info("[REPLAY] Speed: %dx", 1 << i);
+                    }
+                }
+            }
+
+            // [R] EXIT text button on right side
+            if (pebble::ui::draw_text_button(ui_ctx, sw - 140.0f, bottom_bar_y + 6.0f,
+                                              120.0f, 28.0f,
+                                              "[R] EXIT",
+                                              120, 40, 40)) {
+                game_mode = MODE_RESULT;
+                replay_player.reset();
+                sim.init();
+                sim.load_base(active_base_layout);
+                log_info("[REPLAY] Playback cancelled.");
             }
 
             // Health bars
@@ -1605,86 +1745,90 @@ int main() {
             int alloc_used_kb = (int)(frame_alloc.used() / 1024);
             int alloc_cap_kb = (int)(frame_alloc.capacity() / 1024);
 
-            float panel_w = 260.0f;
+            float panel_w = 280.0f;
             float panel_h = 140.0f;
             float panel_x = (float)window_w - panel_w - 10.0f;
             float panel_y = 10.0f;
-            float row_h = 20.0f;
+            float row_h = 18.0f;
             float pad_x = 10.0f;
-            float label_w = 8.0f;
 
             pebble::ui::draw_rect(ui_ctx, panel_x, panel_y, panel_w, panel_h,
                                   10, 10, 20, 200);
             pebble::ui::draw_rect_outline(ui_ctx, panel_x, panel_y, panel_w, panel_h,
                                           1.5f, 80, 180, 255, 200);
 
+            // Title bar
             pebble::ui::draw_rect(ui_ctx, panel_x, panel_y, panel_w, 18.0f,
                                   30, 60, 120, 220);
-            for (int i = 0; i < 8; ++i) {
-                pebble::ui::draw_rect(ui_ctx, panel_x + 8 + i * 14.0f, panel_y + 3,
-                                      11.0f, 12.0f, 150, 220, 255, 255);
-            }
+            pebble::ui::draw_text(ui_ctx, panel_x + 8.0f, panel_y + 3.0f, 12.0f,
+                                  "PROFILER", 150, 220, 255);
 
             float row_y = panel_y + 22.0f;
 
-            pebble::ui::draw_rect(ui_ctx, panel_x + pad_x, row_y + 3, label_w, label_w,
-                                  100, 255, 100, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + pad_x + 14.0f, row_y, 16.0f,
-                                    fps, 100, 255, 100);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 110.0f, row_y + 3, label_w, label_w,
-                                  200, 200, 100, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + 124.0f, row_y, 16.0f,
-                                    frame_ms_int / 10, 200, 200, 100);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 174.0f, row_y + 10.0f, 3.0f, 3.0f,
-                                  200, 200, 100, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + 180.0f, row_y, 16.0f,
-                                    frame_ms_int % 10, 200, 200, 100);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 200.0f, row_y + 3, 12.0f, 6.0f,
-                                  200, 200, 100, 180);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 214.0f, row_y + 3, 12.0f, 6.0f,
-                                  200, 200, 100, 180);
+            // FPS and FRAME row
+            {
+                char fps_str[32];
+                snprintf(fps_str, sizeof(fps_str), "FPS: %d", fps);
+                pebble::ui::draw_text(ui_ctx, panel_x + pad_x, row_y, 12.0f,
+                                      fps_str, 100, 255, 100);
+
+                char frame_str[32];
+                snprintf(frame_str, sizeof(frame_str), "FRAME: %d.%dMS",
+                         frame_ms_int / 10, frame_ms_int % 10);
+                pebble::ui::draw_text(ui_ctx, panel_x + 120.0f, row_y, 12.0f,
+                                      frame_str, 200, 200, 100);
+            }
 
             row_y += row_h;
 
-            pebble::ui::draw_rect(ui_ctx, panel_x + pad_x, row_y + 3, label_w, label_w,
-                                  100, 180, 255, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + pad_x + 14.0f, row_y, 16.0f,
-                                    sprites, 100, 180, 255);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 110.0f, row_y + 3, label_w, label_w,
-                                  255, 160, 100, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + 124.0f, row_y, 16.0f,
-                                    draws, 255, 160, 100);
+            // SPRITES and DRAWS row
+            {
+                char spr_str[32];
+                snprintf(spr_str, sizeof(spr_str), "SPRITES: %d", sprites);
+                pebble::ui::draw_text(ui_ctx, panel_x + pad_x, row_y, 12.0f,
+                                      spr_str, 100, 180, 255);
+
+                char draw_str[32];
+                snprintf(draw_str, sizeof(draw_str), "DRAWS: %d", draws);
+                pebble::ui::draw_text(ui_ctx, panel_x + 140.0f, row_y, 12.0f,
+                                      draw_str, 255, 160, 100);
+            }
 
             row_y += row_h;
 
-            pebble::ui::draw_rect(ui_ctx, panel_x + pad_x, row_y + 3, label_w, label_w,
-                                  220, 220, 100, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + pad_x + 14.0f, row_y, 16.0f,
-                                    tick, 220, 220, 100);
+            // TICK row
+            {
+                char tick_str[32];
+                snprintf(tick_str, sizeof(tick_str), "TICK: %d", tick);
+                pebble::ui::draw_text(ui_ctx, panel_x + pad_x, row_y, 12.0f,
+                                      tick_str, 220, 220, 100);
+            }
 
             row_y += row_h;
 
-            pebble::ui::draw_rect(ui_ctx, panel_x + pad_x, row_y + 3, label_w, label_w,
-                                  180, 130, 255, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + pad_x + 14.0f, row_y, 16.0f,
-                                    alloc_used_kb, 180, 130, 255);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 100.0f, row_y + 2, 3.0f, 14.0f,
-                                  180, 130, 255, 180);
-            pebble::ui::draw_number(ui_ctx, panel_x + 110.0f, row_y, 16.0f,
-                                    alloc_cap_kb, 180, 130, 255);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 200.0f, row_y + 3, 12.0f, 6.0f,
-                                  180, 130, 255, 180);
+            // MEM row
+            {
+                char mem_str[48];
+                snprintf(mem_str, sizeof(mem_str), "MEM: %d/%dKB",
+                         alloc_used_kb, alloc_cap_kb);
+                pebble::ui::draw_text(ui_ctx, panel_x + pad_x, row_y, 12.0f,
+                                      mem_str, 180, 130, 255);
+            }
 
             row_y += row_h;
 
-            pebble::ui::draw_rect(ui_ctx, panel_x + pad_x, row_y + 3, label_w, label_w,
-                                  255, 170, 50, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + pad_x + 14.0f, row_y, 16.0f,
-                                    troop_count, 255, 170, 50);
-            pebble::ui::draw_rect(ui_ctx, panel_x + 110.0f, row_y + 3, label_w, label_w,
-                                  50, 200, 255, 255);
-            pebble::ui::draw_number(ui_ctx, panel_x + 124.0f, row_y, 16.0f,
-                                    building_count, 50, 200, 255);
+            // TROOPS and BLDG row
+            {
+                char troop_str[32];
+                snprintf(troop_str, sizeof(troop_str), "TROOPS: %d", troop_count);
+                pebble::ui::draw_text(ui_ctx, panel_x + pad_x, row_y, 12.0f,
+                                      troop_str, 255, 170, 50);
+
+                char bldg_str[32];
+                snprintf(bldg_str, sizeof(bldg_str), "BLDG: %d", building_count);
+                pebble::ui::draw_text(ui_ctx, panel_x + 140.0f, row_y, 12.0f,
+                                      bldg_str, 50, 200, 255);
+            }
         }
 
         pebble::ui::ui_end(ui_ctx);

@@ -117,6 +117,7 @@ private:
 
     uint16_t m_next_building_id = 1;
     uint16_t m_next_troop_id = 1;
+    Building* m_building_by_id[MAX_BUILDINGS + 1] = {};
     uint32_t m_wall_version = 0; // Invalidates flow fields when walls break
     pebble::FlowFieldCache m_flow_cache;
 

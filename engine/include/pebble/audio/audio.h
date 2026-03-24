@@ -21,6 +21,8 @@ enum class SoundID : uint8_t {
 
 class AudioEngine {
 public:
+    ~AudioEngine() { shutdown(); }
+
     bool init();
     void shutdown();
 

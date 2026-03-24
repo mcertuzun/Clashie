@@ -35,6 +35,11 @@ elseif(PEBBLE_PLATFORM_WINDOWS)
         user32
         gdi32
     )
+elseif(PEBBLE_PLATFORM_WEB)
+    add_library(pebble_platform STATIC
+        src/platform/web/platform_web.cpp
+    )
+    target_link_libraries(pebble_platform PUBLIC pebble_core)
 else()
     # Stub for unsupported platforms during early development
     add_library(pebble_platform STATIC
@@ -53,6 +58,14 @@ if(PEBBLE_PLATFORM_MACOS)
     list(APPEND PEBBLE_GFX_SOURCES
         src/gfx/metal/renderer_metal.mm
     )
+elseif(PEBBLE_PLATFORM_WEB)
+    list(APPEND PEBBLE_GFX_SOURCES
+        src/gfx/opengl/renderer_opengl.cpp
+    )
+elseif(PEBBLE_PLATFORM_WINDOWS)
+    list(APPEND PEBBLE_GFX_SOURCES
+        src/gfx/opengl/renderer_opengl.cpp
+    )
 endif()
 
 add_library(pebble_gfx STATIC ${PEBBLE_GFX_SOURCES})
@@ -70,24 +83,36 @@ add_library(pebble_framework STATIC
 target_link_libraries(pebble_framework PUBLIC pebble_gfx)
 
 # --- Audio library (procedural SFX via miniaudio) ---
-add_library(pebble_audio STATIC
-    src/audio/audio.cpp
-)
-
-target_include_directories(pebble_audio PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
-)
-target_include_directories(pebble_audio PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-target_link_libraries(pebble_audio PUBLIC pebble_core)
-
-if(PEBBLE_PLATFORM_MACOS)
-    target_link_libraries(pebble_audio PUBLIC
-        "-framework AudioToolbox"
-        "-framework CoreAudio"
-        "-framework CoreFoundation"
+# Disabled for web builds — miniaudio needs special Emscripten handling.
+if(NOT PEBBLE_PLATFORM_WEB)
+    add_library(pebble_audio STATIC
+        src/audio/audio.cpp
     )
+
+    target_include_directories(pebble_audio PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
+    )
+    target_include_directories(pebble_audio PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(pebble_audio PUBLIC pebble_core)
+
+    if(PEBBLE_PLATFORM_MACOS)
+        target_link_libraries(pebble_audio PUBLIC
+            "-framework AudioToolbox"
+            "-framework CoreAudio"
+            "-framework CoreFoundation"
+        )
+    endif()
+else()
+    # Provide a stub audio library for web so the game links cleanly
+    add_library(pebble_audio STATIC
+        src/audio/audio_stub_web.cpp
+    )
+    target_include_directories(pebble_audio PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(pebble_audio PUBLIC pebble_core)
 endif()
 
 # --- Convenience target: full engine ---

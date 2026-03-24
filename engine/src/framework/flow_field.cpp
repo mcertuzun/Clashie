@@ -34,8 +34,8 @@ FlowFieldCache::FlowFieldCache() {
 
 void FlowFieldCache::invalidate_all() {
     for (int i = 0; i < FLOW_CACHE_MAX; ++i) {
-        m_entries[i].valid = false;
-        m_entries[i].last_used_tick = 0;
+        m_valid[i] = false;
+        m_last_used_tick[i] = 0;
     }
 }
 
@@ -44,11 +44,11 @@ const FlowField* FlowFieldCache::get_or_compute(uint8_t target_x, uint8_t target
                                                   PassabilityFunc passable_fn, void* user_data) {
     FlowFieldKey key = { target_x, target_y, wall_version };
 
-    // Search cache for existing entry
+    // Search cache for existing entry (keys are compact for cache-friendly scan)
     for (int i = 0; i < FLOW_CACHE_MAX; ++i) {
-        if (m_entries[i].valid && m_entries[i].key == key) {
-            m_entries[i].last_used_tick = current_tick;
-            return &m_entries[i].field;
+        if (m_valid[i] && m_keys[i] == key) {
+            m_last_used_tick[i] = current_tick;
+            return &m_fields[i];
         }
     }
 
@@ -57,26 +57,25 @@ const FlowField* FlowFieldCache::get_or_compute(uint8_t target_x, uint8_t target
     uint32_t oldest_tick = 0xFFFFFFFF;
 
     for (int i = 0; i < FLOW_CACHE_MAX; ++i) {
-        if (!m_entries[i].valid) {
+        if (!m_valid[i]) {
             slot = i;
             break;
         }
-        if (m_entries[i].last_used_tick < oldest_tick) {
-            oldest_tick = m_entries[i].last_used_tick;
+        if (m_last_used_tick[i] < oldest_tick) {
+            oldest_tick = m_last_used_tick[i];
             slot = i;
         }
     }
 
     // Compute the flow field
-    FlowFieldCacheEntry& entry = m_entries[slot];
-    entry.key = key;
-    entry.last_used_tick = current_tick;
-    entry.valid = true;
-    entry.field.clear();
+    m_keys[slot] = key;
+    m_last_used_tick[slot] = current_tick;
+    m_valid[slot] = true;
+    m_fields[slot].clear();
 
-    compute(entry.field, target_x, target_y, passable_fn, user_data);
+    compute(m_fields[slot], target_x, target_y, passable_fn, user_data);
 
-    return &entry.field;
+    return &m_fields[slot];
 }
 
 void FlowFieldCache::compute(FlowField& field, uint8_t target_x, uint8_t target_y,

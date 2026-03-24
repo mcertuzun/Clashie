@@ -79,6 +79,12 @@ struct MetalRenderer::Impl {
     id<MTLBuffer> index_buffer = nil;
     id<MTLBuffer> uniform_buffer = nil;
 
+    // Ring buffer offsets — each upload_batch_data appends, not overwrites
+    size_t vb_offset = 0;
+    size_t ib_offset = 0;
+    size_t current_vb_base = 0; // Base offset for current upload's draw calls
+    size_t current_ib_base = 0;
+
     // White 1x1 fallback texture
     id<MTLTexture> white_texture = nil;
 
@@ -175,9 +181,9 @@ bool MetalRenderer::init(const RendererConfig& config) {
     sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     m_impl->sampler = [m_impl->device newSamplerStateWithDescriptor:sd];
 
-    // Vertex/index buffers (pre-allocated for max batch size)
-    size_t vb_size = 4096 * 4 * sizeof(SpriteVertex);  // 4096 sprites × 4 verts
-    size_t ib_size = 4096 * 6 * sizeof(uint16_t);       // 4096 sprites × 6 indices
+    // Vertex/index buffers — sized for multiple uploads per frame (sprites + UI)
+    size_t vb_size = 2 * 4096 * 4 * sizeof(SpriteVertex);  // 2x headroom
+    size_t ib_size = 2 * 4096 * 6 * sizeof(uint16_t);
     m_impl->vertex_buffer = [m_impl->device newBufferWithLength:vb_size
                                                         options:MTLResourceStorageModeShared];
     m_impl->index_buffer = [m_impl->device newBufferWithLength:ib_size
@@ -224,6 +230,10 @@ void MetalRenderer::begin_frame(float r, float g, float b, float a) {
 
     m_impl->current_cmd = [m_impl->command_queue commandBuffer];
     m_impl->current_encoder = [m_impl->current_cmd renderCommandEncoderWithDescriptor:pass];
+
+    // Reset ring buffer offsets for new frame
+    m_impl->vb_offset = 0;
+    m_impl->ib_offset = 0;
 
     CGSize size = layer.drawableSize;
     m_width = static_cast<int32_t>(size.width);
@@ -293,12 +303,30 @@ void MetalRenderer::texture_destroy(TextureID id) {
 void MetalRenderer::upload_batch_data(const SpriteVertex* vertices, uint32_t vertex_count,
                                        const uint16_t* indices, uint32_t index_count) {
     if (!m_impl->current_encoder || vertex_count == 0) return;
-    memcpy([m_impl->vertex_buffer contents], vertices, vertex_count * sizeof(SpriteVertex));
-    memcpy([m_impl->index_buffer contents], indices, index_count * sizeof(uint16_t));
 
-    // Bind vertex + uniform buffers once
-    [m_impl->current_encoder setVertexBuffer:m_impl->vertex_buffer offset:0 atIndex:0];
+    size_t vb_bytes = vertex_count * sizeof(SpriteVertex);
+    size_t ib_bytes = index_count * sizeof(uint16_t);
+
+    // Append to buffer at current offset (don't overwrite previous uploads)
+    uint8_t* vb_base = (uint8_t*)[m_impl->vertex_buffer contents];
+    uint8_t* ib_base = (uint8_t*)[m_impl->index_buffer contents];
+
+    memcpy(vb_base + m_impl->vb_offset, vertices, vb_bytes);
+    memcpy(ib_base + m_impl->ib_offset, indices, ib_bytes);
+
+    // Remember base offsets for this upload's draw calls
+    m_impl->current_vb_base = m_impl->vb_offset;
+    m_impl->current_ib_base = m_impl->ib_offset;
+
+    // Bind vertex buffer at current offset
+    [m_impl->current_encoder setVertexBuffer:m_impl->vertex_buffer
+                                      offset:m_impl->vb_offset
+                                     atIndex:0];
     [m_impl->current_encoder setVertexBuffer:m_impl->uniform_buffer offset:0 atIndex:1];
+
+    // Advance offsets for next upload
+    m_impl->vb_offset += vb_bytes;
+    m_impl->ib_offset += ib_bytes;
 }
 
 void MetalRenderer::draw_batch(uint32_t index_offset, uint32_t index_count, TextureID texture) {
@@ -319,11 +347,14 @@ void MetalRenderer::draw_batch(uint32_t index_offset, uint32_t index_count, Text
         [m_impl->current_encoder setRenderPipelineState:m_impl->pipeline_untextured];
     }
 
+    // Index offset is relative to current upload's base in the ring buffer
+    size_t absolute_ib_offset = m_impl->current_ib_base + index_offset * sizeof(uint16_t);
+
     [m_impl->current_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                         indexCount:index_count
                                          indexType:MTLIndexTypeUInt16
                                        indexBuffer:m_impl->index_buffer
-                                 indexBufferOffset:index_offset * sizeof(uint16_t)];
+                                 indexBufferOffset:absolute_ib_offset];
 }
 
 void MetalRenderer::set_projection(const float* matrix) {

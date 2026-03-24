@@ -25,3 +25,14 @@ engine/third_party/*/
 # Temporary
 *.tmp
 *.log
+
+# Web build
+build_web/
+
+# Tool configs
+.claude/
+.cursorrules
+.aider*
+
+# Replays
+replays/

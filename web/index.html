@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiniClash — Pebble Engine</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        h1 {
+            margin-bottom: 12px;
+            font-size: 1.4em;
+            color: #f0c040;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        #canvas {
+            border: 2px solid #333;
+            border-radius: 4px;
+            cursor: crosshair;
+        }
+        #status {
+            margin-top: 8px;
+            font-size: 0.85em;
+            color: #888;
+        }
+        /* Prevent context menu on right-click */
+        canvas { -webkit-touch-callout: none; }
+    </style>
+</head>
+<body>
+    <h1>MiniClash</h1>
+    <canvas id="canvas" width="1280" height="720"
+            oncontextmenu="event.preventDefault()"></canvas>
+    <div id="status">Loading...</div>
+
+    <script>
+        var Module = {
+            canvas: (function() {
+                var c = document.getElementById('canvas');
+                c.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+                return c;
+            })(),
+            onRuntimeInitialized: function() {
+                document.getElementById('status').textContent = 'Running';
+            },
+            print: function(text) {
+                console.log(text);
+            },
+            printErr: function(text) {
+                console.error(text);
+            }
+        };
+    </script>
+    <script src="miniclash.js"></script>
+</body>
+</html>

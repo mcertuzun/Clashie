@@ -49,6 +49,7 @@ public:
         if (m_free_count == 0) return nullptr;
         uint16_t idx = m_free_list[--m_free_count];
         m_active[idx] = true;
+        m_active_indices[m_active_count] = idx;
         ++m_active_count;
         T* ptr = &m_storage[idx];
         std::memset(ptr, 0, sizeof(T));
@@ -61,6 +62,13 @@ public:
         assert(m_active[idx]);
         m_active[idx] = false;
         m_free_list[m_free_count++] = static_cast<uint16_t>(idx);
+        // Swap-remove from compact active indices
+        for (size_t i = 0; i < m_active_count; ++i) {
+            if (m_active_indices[i] == static_cast<uint16_t>(idx)) {
+                m_active_indices[i] = m_active_indices[m_active_count - 1];
+                break;
+            }
+        }
         --m_active_count;
     }
 
@@ -84,22 +92,20 @@ public:
     size_t active_count() const { return m_active_count; }
     static constexpr size_t max_count() { return MaxCount; }
 
-    // Iterate over active elements
+    // Iterate over active elements (uses compact index list)
     template<typename Func>
     void for_each(Func&& func) {
-        for (size_t i = 0; i < MaxCount; ++i) {
-            if (m_active[i]) {
-                func(m_storage[i], static_cast<uint16_t>(i));
-            }
+        for (size_t i = 0; i < m_active_count; ++i) {
+            uint16_t idx = m_active_indices[i];
+            func(m_storage[idx], idx);
         }
     }
 
     template<typename Func>
     void for_each(Func&& func) const {
-        for (size_t i = 0; i < MaxCount; ++i) {
-            if (m_active[i]) {
-                func(m_storage[i], static_cast<uint16_t>(i));
-            }
+        for (size_t i = 0; i < m_active_count; ++i) {
+            uint16_t idx = m_active_indices[i];
+            func(m_storage[idx], idx);
         }
     }
 
@@ -107,6 +113,7 @@ private:
     T        m_storage[MaxCount];
     uint16_t m_free_list[MaxCount];
     bool     m_active[MaxCount];
+    uint16_t m_active_indices[MaxCount];
     size_t   m_free_count = MaxCount;
     size_t   m_active_count = 0;
 };

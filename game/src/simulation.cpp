@@ -13,6 +13,7 @@ void Simulation::init() {
     m_troops.clear();
     m_next_building_id = 1;
     m_next_troop_id = 1;
+    std::memset(m_building_by_id, 0, sizeof(m_building_by_id));
     m_wall_version = 0;
     m_flow_cache.invalidate_all();
     m_total_buildings = 0;
@@ -43,6 +44,7 @@ void Simulation::load_base(const BaseLayout& layout) {
         b->max_hp = data.max_hp;
         b->attack_timer = PFP_ZERO;
         b->alive = true;
+        m_building_by_id[b->id] = b;
 
         CellState cell = data.is_wall ? CellState::WALL : CellState::OCCUPIED;
         m_grid.place(bp.grid_x, bp.grid_y, data.size, data.size, b->id, cell);
@@ -186,13 +188,10 @@ void Simulation::move_troop(Troop& troop) {
         return;
     }
 
-    // Find target building
-    Building* target = nullptr;
-    m_buildings.for_each([&](Building& b, uint16_t) {
-        if (b.id == troop.target_building && b.alive) target = &b;
-    });
-
-    if (!target) {
+    // Find target building via O(1) lookup
+    Building* target = (troop.target_building > 0 && troop.target_building < m_next_building_id)
+        ? m_building_by_id[troop.target_building] : nullptr;
+    if (!target || !target->alive) {
         troop.target_building = 0;
         troop.state = TroopState::FIND_TARGET;
         return;
@@ -248,16 +247,17 @@ void Simulation::move_troop(Troop& troop) {
     troop.pos.y += fp_mul(dir.y, fp_mul(data.move_speed, SIM_FIXED_DT));
     troop.facing = dir;
 
-    // Simple separation from other troops
+    // Simple separation from other troops (squared distance to skip sqrt for most pairs)
+    static const fp32 TROOP_MIN_DIST = 26214;     // float_to_fp(0.4f)
+    static const fp32 TROOP_MIN_DIST_SQ = fp_mul(TROOP_MIN_DIST, TROOP_MIN_DIST);
+    static const fp32 TROOP_SEP_FORCE = 6553;     // float_to_fp(0.1f)
     m_troops.for_each([&](Troop& other, uint16_t) {
         if (!other.alive || other.id == troop.id) return;
         Vec2fp diff = troop.pos - other.pos;
-        fp32 d = fp_length(diff);
-        fp32 min_dist = float_to_fp(0.4f);
-        if (d > PFP_ZERO && d < min_dist) {
+        fp32 d_sq = fp_length_sq(diff);
+        if (d_sq > PFP_ZERO && d_sq < TROOP_MIN_DIST_SQ) {
             Vec2fp push = fp_normalize(diff);
-            fp32 force = float_to_fp(0.1f);
-            troop.pos += fp_scale(push, force);
+            troop.pos += fp_scale(push, TROOP_SEP_FORCE);
         }
     });
 }
@@ -268,12 +268,10 @@ void Simulation::troop_attack(Troop& troop) {
         return;
     }
 
-    Building* target = nullptr;
-    m_buildings.for_each([&](Building& b, uint16_t) {
-        if (b.id == troop.target_building && b.alive) target = &b;
-    });
-
-    if (!target) {
+    // Find target building via O(1) lookup
+    Building* target = (troop.target_building > 0 && troop.target_building < m_next_building_id)
+        ? m_building_by_id[troop.target_building] : nullptr;
+    if (!target || !target->alive) {
         troop.target_building = 0;
         troop.state = TroopState::FIND_TARGET;
         return;
@@ -386,6 +384,7 @@ void Simulation::defense_attack(Building& defense) {
 
 void Simulation::destroy_building(Building& building) {
     building.alive = false;
+    m_building_by_id[building.id] = nullptr;
     m_destroyed_buildings++;
 
     if (building.is_wall()) {

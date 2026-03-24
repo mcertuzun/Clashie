@@ -11,8 +11,9 @@ struct Particle {
     float life, max_life; // Remaining / total life (seconds)
     float size;           // Current size (world units)
     float size_start, size_end; // Size over lifetime
-    uint8_t r, g, b, a;  // Start color
+    uint8_t r, g, b, a;  // Current color
     uint8_t r_end, g_end, b_end, a_end; // End color (lerp over lifetime)
+    uint8_t r_start, g_start, b_start, a_start; // Start color (for correct interpolation)
     bool has_gravity;     // Whether gravity applies
 };
 

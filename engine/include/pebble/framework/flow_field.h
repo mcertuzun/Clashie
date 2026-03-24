@@ -72,7 +72,11 @@ private:
     void compute(FlowField& field, uint8_t target_x, uint8_t target_y,
                  PassabilityFunc passable_fn, void* user_data);
 
-    FlowFieldCacheEntry m_entries[FLOW_CACHE_MAX];
+    // Keys separated from fields for cache-friendly linear search
+    FlowFieldKey m_keys[FLOW_CACHE_MAX];
+    FlowField    m_fields[FLOW_CACHE_MAX];
+    uint32_t     m_last_used_tick[FLOW_CACHE_MAX];
+    bool         m_valid[FLOW_CACHE_MAX];
 };
 
 } // namespace pebble

@@ -11,13 +11,19 @@ static uint8_t cocoa_keycode_to_ascii(unsigned short keyCode) {
         case 0x00: return 'a';  // kVK_ANSI_A
         case 0x01: return 's';  // kVK_ANSI_S
         case 0x02: return 'd';  // kVK_ANSI_D
+        case 0x08: return 'c';  // kVK_ANSI_C
         case 0x0D: return 'w';  // kVK_ANSI_W
+        case 0x0E: return 'e';  // kVK_ANSI_E
         case 0x23: return 'p';  // kVK_ANSI_P
         case 0x0F: return 'r';  // kVK_ANSI_R
         case 0x12: return '1';  // kVK_ANSI_1
         case 0x13: return '2';  // kVK_ANSI_2
         case 0x14: return '3';  // kVK_ANSI_3
         case 0x15: return '4';  // kVK_ANSI_4
+        case 0x17: return '5';  // kVK_ANSI_5
+        case 0x16: return '6';  // kVK_ANSI_6
+        case 0x1A: return '7';  // kVK_ANSI_7
+        case 0x1C: return '8';  // kVK_ANSI_8
         case 0x31: return ' ';  // kVK_Space
         case 0x35: return 27;   // kVK_Escape
         case 0x7A: return 128;  // kVK_F1

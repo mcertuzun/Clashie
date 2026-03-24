@@ -30,12 +30,13 @@ struct BatchRange {
 void SpriteBatch::flush() {
     if (m_sprite_count == 0 || !m_renderer || !m_camera) return;
 
-    // Sort: layer -> atlas -> y
+    // Sort: layer -> y -> atlas -> x (fully deterministic, no flickering)
     std::sort(m_sprites, m_sprites + m_sprite_count,
         [](const Sprite& a, const Sprite& b) {
             if (a.layer != b.layer) return a.layer < b.layer;
+            if (a.world_y != b.world_y) return a.world_y < b.world_y;
             if (a.atlas != b.atlas) return a.atlas < b.atlas;
-            return a.world_y < b.world_y;
+            return a.world_x < b.world_x;
         }
     );
 

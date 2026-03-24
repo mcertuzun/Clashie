@@ -46,6 +46,17 @@ void draw_number(UIContext& ctx, float x, float y, float digit_h, int number,
 void draw_timer(UIContext& ctx, float x, float y, float h, int seconds_remaining,
                 uint8_t r, uint8_t g, uint8_t b);
 
+// Text rendering (5x7 bitmap font, uppercase + digits + basic punctuation)
+// Returns width consumed in pixels
+float draw_text(UIContext& ctx, float x, float y, float char_h, const char* text,
+                uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
+
+// Labeled button with text — returns true if clicked
+bool draw_text_button(UIContext& ctx, float x, float y, float w, float h,
+                      const char* label, uint8_t bg_r, uint8_t bg_g, uint8_t bg_b,
+                      uint8_t text_r = 255, uint8_t text_g = 255, uint8_t text_b = 255,
+                      bool selected = false);
+
 void ui_end(UIContext& ctx);
 
 } // namespace pebble::ui

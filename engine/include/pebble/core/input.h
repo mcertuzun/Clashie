@@ -35,8 +35,9 @@ enum Key : uint8_t {
     KEY_ESCAPE = 27,
     KEY_SPACE  = 32,
     KEY_1 = 49, KEY_2 = 50, KEY_3 = 51, KEY_4 = 52,
-    KEY_W = 119, KEY_A = 97, KEY_S = 115, KEY_D = 100,
-    KEY_P = 112, KEY_R = 114,
+    KEY_5 = 53, KEY_6 = 54, KEY_7 = 55, KEY_8 = 56,
+    KEY_A = 97, KEY_C = 99, KEY_D = 100, KEY_E = 101,
+    KEY_P = 112, KEY_R = 114, KEY_S = 115, KEY_W = 119,
     KEY_F1 = 128,
 };
 

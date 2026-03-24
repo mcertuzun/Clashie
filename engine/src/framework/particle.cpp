@@ -57,11 +57,11 @@ void ParticleSystem::update(float dt) {
         // Size interpolation
         p.size = p.size_start + (p.size_end - p.size_start) * t;
 
-        // Color interpolation
-        p.r = (uint8_t)(p.r + (int)(((int)p.r_end - (int)p.r) * t));
-        p.g = (uint8_t)(p.g + (int)(((int)p.g_end - (int)p.g) * t));
-        p.b = (uint8_t)(p.b + (int)(((int)p.b_end - (int)p.b) * t));
-        p.a = (uint8_t)(p.a + (int)(((int)p.a_end - (int)p.a) * t));
+        // Color interpolation (from start color to avoid drift)
+        p.r = (uint8_t)(p.r_start + (int)((int)p.r_end - (int)p.r_start) * t);
+        p.g = (uint8_t)(p.g_start + (int)((int)p.g_end - (int)p.g_start) * t);
+        p.b = (uint8_t)(p.b_start + (int)((int)p.b_end - (int)p.b_start) * t);
+        p.a = (uint8_t)(p.a_start + (int)((int)p.a_end - (int)p.a_start) * t);
 
         ++i;
     }
@@ -85,8 +85,8 @@ void ParticleSystem::emit_building_destroyed(float x, float y) {
 
         p.life = p.max_life = particle_randf_range(0.6f, 1.2f);
 
-        p.size_start = particle_randf_range(0.15f, 0.35f);
-        p.size_end = 0.05f;
+        p.size_start = particle_randf_range(0.5f, 1.0f);
+        p.size_end = 0.15f;
         p.size = p.size_start;
 
         // Brown / gray color
@@ -96,6 +96,7 @@ void ParticleSystem::emit_building_destroyed(float x, float y) {
         } else {
             p.r = 160; p.g = 110; p.b = 60; p.a = 255;
         }
+        p.r_start = p.r; p.g_start = p.g; p.b_start = p.b; p.a_start = p.a;
         p.r_end = 80; p.g_end = 80; p.b_end = 80; p.a_end = 0;
 
         p.has_gravity = true;
@@ -118,11 +119,12 @@ void ParticleSystem::emit_troop_killed(float x, float y) {
 
         p.life = p.max_life = particle_randf_range(0.3f, 0.6f);
 
-        p.size_start = particle_randf_range(0.08f, 0.18f);
-        p.size_end = 0.02f;
+        p.size_start = particle_randf_range(0.3f, 0.6f);
+        p.size_end = 0.08f;
         p.size = p.size_start;
 
         p.r = 255; p.g = 50; p.b = 30; p.a = 255;
+        p.r_start = p.r; p.g_start = p.g; p.b_start = p.b; p.a_start = p.a;
         p.r_end = 180; p.g_end = 20; p.b_end = 20; p.a_end = 0;
 
         p.has_gravity = false;
@@ -145,11 +147,12 @@ void ParticleSystem::emit_attack_hit(float x, float y) {
 
         p.life = p.max_life = particle_randf_range(0.1f, 0.25f);
 
-        p.size_start = particle_randf_range(0.06f, 0.12f);
-        p.size_end = 0.01f;
+        p.size_start = particle_randf_range(0.25f, 0.45f);
+        p.size_end = 0.05f;
         p.size = p.size_start;
 
         p.r = 255; p.g = 255; p.b = 200; p.a = 255;
+        p.r_start = p.r; p.g_start = p.g; p.b_start = p.b; p.a_start = p.a;
         p.r_end = 255; p.g_end = 200; p.b_end = 50; p.a_end = 0;
 
         p.has_gravity = false;
@@ -172,11 +175,12 @@ void ParticleSystem::emit_defense_fire(float x, float y, float tx, float ty) {
 
         p.life = p.max_life = particle_randf_range(0.15f, 0.35f);
 
-        p.size_start = particle_randf_range(0.08f, 0.15f);
-        p.size_end = 0.03f;
+        p.size_start = particle_randf_range(0.3f, 0.5f);
+        p.size_end = 0.1f;
         p.size = p.size_start;
 
         p.r = 255; p.g = 160; p.b = 40; p.a = 230;
+        p.r_start = p.r; p.g_start = p.g; p.b_start = p.b; p.a_start = p.a;
         p.r_end = 255; p.g_end = 80; p.b_end = 10; p.a_end = 0;
 
         p.has_gravity = false;
@@ -202,11 +206,12 @@ void ParticleSystem::emit_star_earned() {
 
         p.life = p.max_life = particle_randf_range(0.8f, 1.5f);
 
-        p.size_start = particle_randf_range(0.15f, 0.3f);
-        p.size_end = 0.05f;
+        p.size_start = particle_randf_range(0.5f, 0.9f);
+        p.size_end = 0.15f;
         p.size = p.size_start;
 
         p.r = 255; p.g = 220; p.b = 50; p.a = 255;
+        p.r_start = p.r; p.g_start = p.g; p.b_start = p.b; p.a_start = p.a;
         p.r_end = 255; p.g_end = 180; p.b_end = 0; p.a_end = 0;
 
         p.has_gravity = false;
