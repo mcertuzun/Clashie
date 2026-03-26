@@ -2,6 +2,8 @@
 
 A Clash of Clans-inspired tower defense game built on a custom C++ engine from scratch.
 
+![MiniClash Demo](ClashieDemo.gif)
+
 ---
 
 ## Why This Project
